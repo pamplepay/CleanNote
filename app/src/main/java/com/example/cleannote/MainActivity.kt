@@ -797,9 +797,11 @@ class MainActivity : ComponentActivity() {
 
     private fun getServerUrl(): String {
         val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        val host = prefs.getString(KEY_HOST, DEFAULT_HOST) ?: DEFAULT_HOST
-        val port = prefs.getString(KEY_PORT, DEFAULT_PORT) ?: DEFAULT_PORT
-        return "http://$host:$port/"
+        val host = prefs.getString(KEY_HOST, DEFAULT_HOST)?.takeIf { it.isNotBlank() } ?: DEFAULT_HOST
+        val port = prefs.getString(KEY_PORT, DEFAULT_PORT)?.takeIf { it.isNotBlank() } ?: DEFAULT_PORT
+        val url = "http://$host:$port/"
+        Log.d("CleanNoteLog", "[SERVER_URL] 접속 URL: $url")
+        return url
     }
 
     private fun getPaymentProvider(): String {
@@ -817,11 +819,22 @@ class MainActivity : ComponentActivity() {
     }
 
     fun saveServerConfig(host: String, port: String, provider: String) {
+        // 빈 host가 저장되면 앱 실행 시 흰 화면이 발생하므로 방어 처리
+        if (host.isBlank()) {
+            sendLogToWeb("ERROR", "setServerConfig 무시: host가 비어있음 (현재 설정 유지)")
+            Toast.makeText(this, "서버 주소가 비어 있어 설정을 저장하지 않았습니다.", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val finalPort = if (port.isBlank()) DEFAULT_PORT else port
+        val finalProvider = if (provider.isBlank()) DEFAULT_PROVIDER else provider
         getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit().apply {
-            putString(KEY_HOST, host); putString(KEY_PORT, port); putString(KEY_PROVIDER, provider); apply()
+            putString(KEY_HOST, host.trim())
+            putString(KEY_PORT, finalPort.trim())
+            putString(KEY_PROVIDER, finalProvider.trim())
+            apply()
         }
         val normalized = getPaymentProvider()
-        sendLogToWeb("CONFIG_SAVED", "저장된 VAN: '$provider' → 인식값: '$normalized'")
+        sendLogToWeb("CONFIG_SAVED", "host='${host.trim()}' port='${finalPort.trim()}' VAN='$finalProvider' → 인식값: '$normalized'")
         Toast.makeText(this, "설정 저장 완료 (VAN: $normalized)", Toast.LENGTH_SHORT).show()
     }
 }
