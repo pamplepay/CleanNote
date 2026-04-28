@@ -45,11 +45,8 @@ import kotlin.concurrent.thread
 // 디버그 모드 설정 (true: 파라미터 확인 팝업 표시, false: 즉시 실행)
 private const val IS_DEBUG = true
 
-// 결제사 플래그 상수
-// PROVIDER_KICC: KICC (한국정보통신) A-Check 단말기용
-// PROVIDER_NICE: NICE 정보통신 PLUS-VCAT 단말기용
-private const val PROVIDER_KICC = "KICC"
-private const val PROVIDER_NICE = "NICE"
+// 결제사 / 화면 크기는 AppConfig.kt 에서 빌드 전에 설정합니다.
+// → BUILD_PAYMENT_PROVIDER, BUILD_SCREEN_SIZE
 
 class MainActivity : ComponentActivity() {
     private lateinit var paymentLauncher: ActivityResultLauncher<Intent>
@@ -60,11 +57,10 @@ class MainActivity : ComponentActivity() {
     private val PREFS_NAME = "cleanpos_config"
     private val KEY_HOST = "server_host"
     private val KEY_PORT = "server_port"
-    private val KEY_PROVIDER = "payment_provider"
+    // KEY_PROVIDER / DEFAULT_PROVIDER 는 빌드 타임 상수(BUILD_PAYMENT_PROVIDER)로 대체됨
 
     private val DEFAULT_HOST = "139.150.82.48"
     private val DEFAULT_PORT = "8023"
-    private val DEFAULT_PROVIDER = PROVIDER_KICC
 
     // 가맹점 정보 상수
     private val KEY_MERCHANT_NAME = "merchant_name"
@@ -188,6 +184,10 @@ class MainActivity : ComponentActivity() {
                         onWebViewCreated = {
                             mainWebView = it
                             if (!isDeviceInitialized) initPaymentDevice()
+                        },
+                        onPageReady = {
+                            // 페이지 로드 완료 후 빌드 고정값을 웹으로 전달
+                            sendBuildConfigToWeb()
                         }
                     )
                 }
@@ -804,21 +804,26 @@ class MainActivity : ComponentActivity() {
         return url
     }
 
+    // 결제사는 AppConfig.kt 의 BUILD_PAYMENT_PROVIDER 값으로 빌드 시 고정됩니다.
+    // 런타임에 변경되지 않으므로 SharedPreferences를 읽지 않습니다.
     private fun getPaymentProvider(): String {
-        val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        val raw = (prefs.getString(KEY_PROVIDER, DEFAULT_PROVIDER) ?: DEFAULT_PROVIDER).trim().uppercase()
-        Log.d("CleanNoteLog", "[PROVIDER_RAW] SharedPreferences 저장값: '$raw'")
-        return when {
-            raw.contains("NICE") || raw.contains("나이스") || raw.contains("나이") || raw == "2" -> PROVIDER_NICE
-            raw.contains("KICC") || raw.contains("케이") || raw.contains("한국정보") || raw == "1" -> PROVIDER_KICC
-            else -> {
-                Log.d("CleanNoteLog", "[PROVIDER_WARN] 알 수 없는 VAN 값: '$raw' → KICC로 처리")
-                PROVIDER_KICC
-            }
+        Log.d("CleanNoteLog", "[PROVIDER] 빌드 고정값: $BUILD_PAYMENT_PROVIDER")
+        return BUILD_PAYMENT_PROVIDER
+    }
+
+    // 페이지 로드 완료 후 빌드 고정값을 웹으로 전달
+    // 웹에서 window.onAppConfig(provider, screenSize) 를 구현하면 설정값을 수신합니다.
+    fun sendBuildConfigToWeb() {
+        runOnUiThread {
+            val js = "if(typeof window.onAppConfig === 'function') window.onAppConfig('$BUILD_PAYMENT_PROVIDER', '$BUILD_SCREEN_SIZE');"
+            mainWebView?.evaluateJavascript(js, null)
+            Log.d("CleanNoteLog", "[BUILD_CONFIG] 웹 전달: VAN=$BUILD_PAYMENT_PROVIDER, 화면크기=${BUILD_SCREEN_SIZE}인치")
         }
     }
 
-    fun saveServerConfig(host: String, port: String, provider: String) {
+    // provider 파라미터는 빌드 타임 상수(BUILD_PAYMENT_PROVIDER)로 고정되므로 무시됩니다.
+    // 웹 설정 화면에서 VAN 선택/화면 크기 선택 항목은 더 이상 사용하지 않습니다.
+    fun saveServerConfig(host: String, port: String, provider: String = "") {
         // 빈 host가 저장되면 앱 실행 시 흰 화면이 발생하므로 방어 처리
         if (host.isBlank()) {
             sendLogToWeb("ERROR", "setServerConfig 무시: host가 비어있음 (현재 설정 유지)")
@@ -826,16 +831,14 @@ class MainActivity : ComponentActivity() {
             return
         }
         val finalPort = if (port.isBlank()) DEFAULT_PORT else port
-        val finalProvider = if (provider.isBlank()) DEFAULT_PROVIDER else provider
         getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit().apply {
             putString(KEY_HOST, host.trim())
             putString(KEY_PORT, finalPort.trim())
-            putString(KEY_PROVIDER, finalProvider.trim())
+            // VAN은 빌드 타임 고정값 사용 - SharedPreferences에 저장하지 않음
             apply()
         }
-        val normalized = getPaymentProvider()
-        sendLogToWeb("CONFIG_SAVED", "host='${host.trim()}' port='${finalPort.trim()}' VAN='$finalProvider' → 인식값: '$normalized'")
-        Toast.makeText(this, "설정 저장 완료 (VAN: $normalized)", Toast.LENGTH_SHORT).show()
+        sendLogToWeb("CONFIG_SAVED", "host='${host.trim()}' port='${finalPort.trim()}' | VAN 고정값: $BUILD_PAYMENT_PROVIDER | 화면크기: ${BUILD_SCREEN_SIZE}인치")
+        Toast.makeText(this, "설정 저장 완료 (VAN: $BUILD_PAYMENT_PROVIDER)", Toast.LENGTH_SHORT).show()
     }
 }
 
@@ -844,25 +847,44 @@ class WebAppInterface(private val activity: MainActivity) {
     fun processPayment(amount: String, datano: String, paymentType: String, installment: String) {
         activity.runOnUiThread { activity.startPaymentApp(amount, datano, paymentType, installment) }
     }
+
+    // provider 파라미터는 하위 호환성을 위해 유지하지만 실제로는 BUILD_PAYMENT_PROVIDER 사용
     @JavascriptInterface
     fun setServerConfig(host: String, port: String, provider: String) {
         activity.runOnUiThread { activity.saveServerConfig(host, port, provider) }
     }
+
     @JavascriptInterface
     fun setMerchantConfig(name: String, address: String) {
         activity.runOnUiThread { activity.saveMerchantConfig(name, address) }
     }
+
     @JavascriptInterface
     fun initDevice() { activity.runOnUiThread { activity.initPaymentDevice() } }
+
     @JavascriptInterface
     fun printReceipt(amount: String, cardName: String, cardNum: String, approvalNum: String, approvalDate: String) {
         activity.printReceipt(amount, cardName, cardNum, approvalNum, approvalDate)
     }
+
+    // 웹에서 빌드 고정값 조회 (동기 호출용)
+    // 사용 예: const provider = Android.getPaymentProvider();
+    @JavascriptInterface
+    fun getPaymentProvider(): String = BUILD_PAYMENT_PROVIDER
+
+    // 사용 예: const size = Android.getScreenSize();
+    @JavascriptInterface
+    fun getScreenSize(): String = BUILD_SCREEN_SIZE
 }
 
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
-fun WebViewScreen(url: String, modifier: Modifier = Modifier, onWebViewCreated: (WebView) -> Unit) {
+fun WebViewScreen(
+    url: String,
+    modifier: Modifier = Modifier,
+    onWebViewCreated: (WebView) -> Unit,
+    onPageReady: (() -> Unit)? = null
+) {
     var webViewInstance: WebView? by remember { mutableStateOf(null) }
     var canGoBack by remember { mutableStateOf(false) }
     BackHandler(enabled = canGoBack) { webViewInstance?.goBack() }
@@ -874,6 +896,7 @@ fun WebViewScreen(url: String, modifier: Modifier = Modifier, onWebViewCreated: 
                     override fun onPageFinished(view: WebView?, url: String?) {
                         super.onPageFinished(view, url)
                         canGoBack = view?.canGoBack() ?: false
+                        onPageReady?.invoke()   // 페이지 로드 완료 → 빌드 설정값 전달
                     }
                 }
                 settings.javaScriptEnabled = true
