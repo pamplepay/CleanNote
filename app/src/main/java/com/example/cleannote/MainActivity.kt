@@ -69,6 +69,10 @@ class MainActivity : ComponentActivity() {
     private val DEFAULT_MERCHANT_NAME = ""
     private val DEFAULT_MERCHANT_ADDRESS = ""
 
+    // 영수증 하단 문구 (웹에서 setReceiptFooter()로 설정)
+    private val KEY_RECEIPT_FOOTER = "receipt_footer"
+    private val DEFAULT_RECEIPT_FOOTER = "세차노트를 이용해 주셔서 감사합니다."
+
     // ── 사용자별 설정 키 생성 ──────────────────────────────────
     // 로그인한 사용자명을 prefix로 붙여 사용자마다 독립적인 설정을 저장합니다.
     // 예) 사용자 "1111" → "1111_server_host", "1111_server_port"
@@ -563,6 +567,7 @@ class MainActivity : ComponentActivity() {
                 val CRLF = "\r\n"
                 val merchantName = getMerchantName()
                 val merchantAddress = getMerchantAddress()
+                val receiptFooter = getReceiptFooter()
                 val sb = StringBuilder().apply {
                     append("C").append(CRLF)
                     if (cardName == "현금영수증") append("T220   [ 현 금 영 수 증 ]").append(CRLF)
@@ -579,7 +584,7 @@ class MainActivity : ComponentActivity() {
                     append("T110승인번호 : ${approvalNum}").append(CRLF)
                     append("T110승인일시 : ${approvalDate}").append(CRLF)
                     append("T110--------------------------------").append(CRLF)
-                    append("T110  세차노트를 이용해 주셔서 감사합니다.").append(CRLF)
+                    append("T110  ${receiptFooter}").append(CRLF)
                     append("L120").append(CRLF)
                     append("PCF").append(CRLF)
                 }
@@ -607,6 +612,7 @@ class MainActivity : ComponentActivity() {
                 val CRLF = "\r\n"
                 val merchantName = getMerchantName()
                 val merchantAddress = getMerchantAddress()
+                val receiptFooter = getReceiptFooter()
                 val sb = StringBuilder().apply {
                     append("C").append(CRLF)
                     append("T220   [ 취 소 영 수 증 ]").append(CRLF)
@@ -622,7 +628,7 @@ class MainActivity : ComponentActivity() {
                     append("T110승인번호 : ${approvalNum}").append(CRLF)
                     append("T110취소일시 : ${approvalDate}").append(CRLF)
                     append("T110--------------------------------").append(CRLF)
-                    append("T110  세차노트를 이용해 주셔서 감사합니다.").append(CRLF)
+                    append("T110  ${receiptFooter}").append(CRLF)
                     append("L120").append(CRLF)
                     append("PCF").append(CRLF)
                 }
@@ -727,6 +733,7 @@ class MainActivity : ComponentActivity() {
             try {
                 val merchantName = getMerchantName()
                 val merchantAddress = getMerchantAddress()
+                val receiptFooter = getReceiptFooter()
                 val ESC = "\u001b"
                 val printData = StringBuilder().apply {
                     append("${ESC}@")
@@ -746,7 +753,7 @@ class MainActivity : ComponentActivity() {
                     append("승인번호 : ${approvalNum}\n")
                     append("승인일시 : ${approvalDate}\n")
                     append("------------------------------------------\n")
-                    append("  세차노트를 이용해 주셔서 감사합니다.\n\n\n\n")
+                    append("  ${receiptFooter}\n\n\n\n")
                     append("${ESC}i")
                 }.toString()
 
@@ -766,6 +773,7 @@ class MainActivity : ComponentActivity() {
             try {
                 val merchantName = getMerchantName()
                 val merchantAddress = getMerchantAddress()
+                val receiptFooter = getReceiptFooter()
                 val ESC = "\u001b"
                 val printData = StringBuilder().apply {
                     append("${ESC}@")
@@ -784,7 +792,7 @@ class MainActivity : ComponentActivity() {
                     append("승인번호 : ${approvalNum}\n")
                     append("취소일시 : ${approvalDate}\n")
                     append("------------------------------------------\n")
-                    append("  세차노트를 이용해 주셔서 감사합니다.\n\n\n\n")
+                    append("  ${receiptFooter}\n\n\n\n")
                     append("${ESC}i")
                 }.toString()
 
@@ -821,6 +829,23 @@ class MainActivity : ComponentActivity() {
             apply()
         }
         Toast.makeText(this, "가맹점 정보가 저장되었습니다.", Toast.LENGTH_SHORT).show()
+    }
+
+    // 영수증 하단 문구 조회 (미설정 시 기본 문구 반환)
+    fun getReceiptFooter(): String {
+        val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        return prefs.getString(KEY_RECEIPT_FOOTER, DEFAULT_RECEIPT_FOOTER)
+            ?.takeIf { it.isNotBlank() } ?: DEFAULT_RECEIPT_FOOTER
+    }
+
+    // 웹에서 Android.setReceiptFooter("문구") 로 호출하여 영수증 하단 문구를 저장
+    fun saveReceiptFooter(footer: String) {
+        val text = footer.trim()
+        getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit()
+            .putString(KEY_RECEIPT_FOOTER, text)
+            .apply()
+        Log.d("CleanNoteLog", "[RECEIPT_FOOTER] 저장: '$text'")
+        Toast.makeText(this, "영수증 문구가 저장되었습니다.", Toast.LENGTH_SHORT).show()
     }
 
     private fun getServerUrl(): String {
@@ -861,50 +886,52 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    // provider 파라미터는 빌드 타임 상수(BUILD_PAYMENT_PROVIDER)로 고정되므로 무시됩니다.
-    // 웹 설정 화면에서 VAN 선택/화면 크기 선택 항목은 더 이상 사용하지 않습니다.
+    // ── 공통: host/port 문자열을 정리하여 저장 ──────────────────────────
+    // 저장만 수행. WebView 이동 없음.
+    // 페이지 자동 초기화 호출에서도 안전하게 사용 가능.
     fun saveServerConfig(host: String, port: String, provider: String = "") {
-        // http:// 또는 https:// 프리픽스, 끝의 슬래시 제거 후 순수 호스트만 저장
         val cleanHost = host.trim()
             .removePrefix("https://")
             .removePrefix("http://")
             .trimEnd('/')
             .trim()
 
-        // 빈 host가 저장되면 앱 실행 시 흰 화면이 발생하므로 방어 처리
         if (cleanHost.isBlank()) {
             sendLogToWeb("ERROR", "setServerConfig 무시: host가 비어있음 (현재 설정 유지)")
-            Toast.makeText(this, "서버 주소가 비어 있어 설정을 저장하지 않았습니다.", Toast.LENGTH_SHORT).show()
+            runOnUiThread {
+                Toast.makeText(this, "서버 주소가 비어 있어 설정을 저장하지 않았습니다.", Toast.LENGTH_SHORT).show()
+            }
             return
         }
         val finalPort = if (port.isBlank()) DEFAULT_PORT else port.trim()
         val currentUser = getCurrentUser()
 
-        // 변경 전 URL 기록 (실제로 바뀌었을 때만 리로드하기 위함)
-        val previousUrl = getServerUrl()
-        val newUrl = "http://$cleanHost:$finalPort/"
-
-        // 사용자별 키에 저장 (사용자가 없으면 기기 공통 키에 저장)
         getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit().apply {
             putString(userKey(KEY_HOST), cleanHost)
             putString(userKey(KEY_PORT), finalPort)
-            // VAN은 빌드 타임 고정값 사용 - SharedPreferences에 저장하지 않음
             apply()
         }
 
+        val newUrl = "http://$cleanHost:$finalPort/"
         val userLabel = if (currentUser.isNotEmpty()) "사용자: '$currentUser'" else "기기 공통"
-        sendLogToWeb("CONFIG_SAVED", "$userLabel → 서버: $newUrl | VAN: $BUILD_PAYMENT_PROVIDER")
-        Log.d("CleanNoteLog", "[CONFIG_SAVED] $userLabel, URL: $newUrl (이전: $previousUrl)")
+        sendLogToWeb("CONFIG_SAVED", "$userLabel → 서버 저장: $newUrl")
+        Log.d("CleanNoteLog", "[CONFIG_SAVED] $userLabel, URL: $newUrl")
+    }
 
-        // 서버 주소가 실제로 변경된 경우에만 WebView 재접속
-        // (같은 주소를 저장할 때는 현재 페이지 유지 → 설정 화면이 닫히지 않음)
-        if (newUrl != previousUrl) {
-            runOnUiThread {
-                Toast.makeText(this, "[$userLabel] 서버 변경 → $newUrl", Toast.LENGTH_SHORT).show()
-                mainWebView?.loadUrl(newUrl)
-            }
-        } else {
-            Log.d("CleanNoteLog", "[CONFIG_SAVED] 서버 주소 동일 → WebView 유지")
+    // ── 사용자가 명시적으로 "앱에 설정 전송" 버튼을 눌렀을 때 호출 ──────
+    // 저장 + WebView를 새 서버 주소로 즉시 재접속.
+    // 웹에서: Android.applyServerConfig(host, port, provider)
+    fun applyServerConfig(host: String, port: String, provider: String = "") {
+        saveServerConfig(host, port, provider)   // 먼저 저장
+        val newUrl = getServerUrl()              // 저장 후 URL 읽기
+        val currentUser = getCurrentUser()
+        val userLabel = if (currentUser.isNotEmpty()) "사용자: '$currentUser'" else "기기 공통"
+
+        sendLogToWeb("SERVER_APPLY", "$userLabel → 접속: $newUrl")
+        Log.d("CleanNoteLog", "[SERVER_APPLY] $userLabel → $newUrl")
+        runOnUiThread {
+            Toast.makeText(this, "[$userLabel] 서버 변경 → $newUrl", Toast.LENGTH_SHORT).show()
+            mainWebView?.loadUrl(newUrl)
         }
     }
 }
@@ -915,10 +942,20 @@ class WebAppInterface(private val activity: MainActivity) {
         activity.runOnUiThread { activity.startPaymentApp(amount, datano, paymentType, installment) }
     }
 
-    // provider 파라미터는 하위 호환성을 위해 유지하지만 실제로는 BUILD_PAYMENT_PROVIDER 사용
+    // 서버 설정 저장만 수행 (WebView 이동 없음)
+    // 페이지 자동 초기화 시 안전하게 사용 가능
+    // 사용 예: Android.setServerConfig(host, port, provider)
     @JavascriptInterface
     fun setServerConfig(host: String, port: String, provider: String) {
-        activity.runOnUiThread { activity.saveServerConfig(host, port, provider) }
+        activity.saveServerConfig(host, port, provider)
+    }
+
+    // 서버 설정 저장 + 즉시 새 서버로 WebView 이동
+    // "앱에 설정 전송" 버튼 클릭 시 호출
+    // 사용 예: Android.applyServerConfig(host, port, provider)
+    @JavascriptInterface
+    fun applyServerConfig(host: String, port: String, provider: String) {
+        activity.applyServerConfig(host, port, provider)
     }
 
     @JavascriptInterface
@@ -954,6 +991,18 @@ class WebAppInterface(private val activity: MainActivity) {
     // 사용 예: const size = Android.getScreenSize();
     @JavascriptInterface
     fun getScreenSize(): String = BUILD_SCREEN_SIZE
+
+    // 영수증 하단 문구 저장
+    // 사용 예: Android.setReceiptFooter("감사합니다. 또 방문해 주세요.");
+    @JavascriptInterface
+    fun setReceiptFooter(footer: String) {
+        activity.runOnUiThread { activity.saveReceiptFooter(footer) }
+    }
+
+    // 영수증 하단 문구 조회 (동기)
+    // 사용 예: const footer = Android.getReceiptFooter();
+    @JavascriptInterface
+    fun getReceiptFooter(): String = activity.getReceiptFooter()
 }
 
 @SuppressLint("SetJavaScriptEnabled")

@@ -16,12 +16,12 @@ const val PROVIDER_KICC = "KICC"
 // ------------------------------------------------------------------
 // [1] 결제사 선택 - 빌드할 APK에 맞게 하나만 활성화하세요
 // ------------------------------------------------------------------
-//const val BUILD_PAYMENT_PROVIDER = PROVIDER_NICE      // ← NICE APK 빌드 시 활성화 (기본값)
- const val BUILD_PAYMENT_PROVIDER = PROVIDER_KICC   // ← KICC APK 빌드 시 주석 해제
+const val BUILD_PAYMENT_PROVIDER = PROVIDER_NICE      // ← NICE APK 빌드 시 활성화 (기본값)
+// const val BUILD_PAYMENT_PROVIDER = PROVIDER_KICC   // ← KICC APK 빌드 시 주석 해제
 
 // ------------------------------------------------------------------
 // [2] 화면 크기 설정 - 단말기 인치에 맞게 설정하세요
 // ------------------------------------------------------------------
-//const val BUILD_SCREEN_SIZE = "10"    // 10인치 (기본값)
-const val BUILD_SCREEN_SIZE = "8"  // 8인치
+const val BUILD_SCREEN_SIZE = "10"    // 10인치 (기본값)
+//const val BUILD_SCREEN_SIZE = "8"  // 8인치
 // const val BUILD_SCREEN_SIZE = "7"  // 7인치
