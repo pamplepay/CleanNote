@@ -57,6 +57,7 @@ class MainActivity : ComponentActivity() {
     private val PREFS_NAME = "cleanpos_config"
     private val KEY_HOST = "server_host"
     private val KEY_PORT = "server_port"
+    private val KEY_CURRENT_USER = "current_user"   // 현재 로그인 사용자명
     // KEY_PROVIDER / DEFAULT_PROVIDER 는 빌드 타임 상수(BUILD_PAYMENT_PROVIDER)로 대체됨
 
     private val DEFAULT_HOST = "139.150.82.48"
@@ -67,6 +68,33 @@ class MainActivity : ComponentActivity() {
     private val KEY_MERCHANT_ADDRESS = "merchant_address"
     private val DEFAULT_MERCHANT_NAME = ""
     private val DEFAULT_MERCHANT_ADDRESS = ""
+
+    // ── 사용자별 설정 키 생성 ──────────────────────────────────
+    // 로그인한 사용자명을 prefix로 붙여 사용자마다 독립적인 설정을 저장합니다.
+    // 예) 사용자 "1111" → "1111_server_host", "1111_server_port"
+    // 사용자가 없으면 기기 공통 키(server_host)를 그대로 사용합니다.
+    private fun userKey(baseKey: String): String {
+        val user = getCurrentUser()
+        return if (user.isNotEmpty()) "${user}_$baseKey" else baseKey
+    }
+
+    fun getCurrentUser(): String {
+        return (getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .getString(KEY_CURRENT_USER, "") ?: "").trim()
+    }
+
+    // 웹 로그인 완료 후 호출 → 사용자별 서버 설정으로 전환 + WebView 재접속
+    fun setCurrentUser(username: String) {
+        val cleanUser = username.trim()
+        getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit()
+            .putString(KEY_CURRENT_USER, cleanUser)
+            .apply()
+        Log.d("CleanNoteLog", "[USER] 현재 사용자: '$cleanUser'")
+        // 해당 사용자 전용 서버 URL로 WebView 재접속
+        val url = getServerUrl()
+        sendLogToWeb("USER_SWITCH", "사용자: '$cleanUser' → 서버: $url")
+        runOnUiThread { mainWebView?.loadUrl(url) }
+    }
 
     private fun sendLogToWeb(tag: String, message: String) {
         val fullLog = "[$tag] $message"
@@ -797,10 +825,22 @@ class MainActivity : ComponentActivity() {
 
     private fun getServerUrl(): String {
         val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        val host = prefs.getString(KEY_HOST, DEFAULT_HOST)?.takeIf { it.isNotBlank() } ?: DEFAULT_HOST
-        val port = prefs.getString(KEY_PORT, DEFAULT_PORT)?.takeIf { it.isNotBlank() } ?: DEFAULT_PORT
+        // 1순위: 사용자별 설정 / 2순위: 기기 공통 설정 / 3순위: 하드코딩 기본값
+        val rawHost = prefs.getString(userKey(KEY_HOST), null)?.takeIf { it.isNotBlank() }
+            ?: prefs.getString(KEY_HOST, DEFAULT_HOST)?.takeIf { it.isNotBlank() }
+            ?: DEFAULT_HOST
+        // 이전에 http:// 가 포함된 채로 저장된 값을 방어 처리
+        val host = rawHost.trim()
+            .removePrefix("https://")
+            .removePrefix("http://")
+            .trimEnd('/')
+            .trim()
+            .ifBlank { DEFAULT_HOST }
+        val port = prefs.getString(userKey(KEY_PORT), null)?.takeIf { it.isNotBlank() }
+            ?: prefs.getString(KEY_PORT, DEFAULT_PORT)?.takeIf { it.isNotBlank() }
+            ?: DEFAULT_PORT
         val url = "http://$host:$port/"
-        Log.d("CleanNoteLog", "[SERVER_URL] 접속 URL: $url")
+        Log.d("CleanNoteLog", "[SERVER_URL] 사용자: '${getCurrentUser()}', URL: $url")
         return url
     }
 
@@ -824,21 +864,48 @@ class MainActivity : ComponentActivity() {
     // provider 파라미터는 빌드 타임 상수(BUILD_PAYMENT_PROVIDER)로 고정되므로 무시됩니다.
     // 웹 설정 화면에서 VAN 선택/화면 크기 선택 항목은 더 이상 사용하지 않습니다.
     fun saveServerConfig(host: String, port: String, provider: String = "") {
+        // http:// 또는 https:// 프리픽스, 끝의 슬래시 제거 후 순수 호스트만 저장
+        val cleanHost = host.trim()
+            .removePrefix("https://")
+            .removePrefix("http://")
+            .trimEnd('/')
+            .trim()
+
         // 빈 host가 저장되면 앱 실행 시 흰 화면이 발생하므로 방어 처리
-        if (host.isBlank()) {
+        if (cleanHost.isBlank()) {
             sendLogToWeb("ERROR", "setServerConfig 무시: host가 비어있음 (현재 설정 유지)")
             Toast.makeText(this, "서버 주소가 비어 있어 설정을 저장하지 않았습니다.", Toast.LENGTH_SHORT).show()
             return
         }
-        val finalPort = if (port.isBlank()) DEFAULT_PORT else port
+        val finalPort = if (port.isBlank()) DEFAULT_PORT else port.trim()
+        val currentUser = getCurrentUser()
+
+        // 변경 전 URL 기록 (실제로 바뀌었을 때만 리로드하기 위함)
+        val previousUrl = getServerUrl()
+        val newUrl = "http://$cleanHost:$finalPort/"
+
+        // 사용자별 키에 저장 (사용자가 없으면 기기 공통 키에 저장)
         getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit().apply {
-            putString(KEY_HOST, host.trim())
-            putString(KEY_PORT, finalPort.trim())
+            putString(userKey(KEY_HOST), cleanHost)
+            putString(userKey(KEY_PORT), finalPort)
             // VAN은 빌드 타임 고정값 사용 - SharedPreferences에 저장하지 않음
             apply()
         }
-        sendLogToWeb("CONFIG_SAVED", "host='${host.trim()}' port='${finalPort.trim()}' | VAN 고정값: $BUILD_PAYMENT_PROVIDER | 화면크기: ${BUILD_SCREEN_SIZE}인치")
-        Toast.makeText(this, "설정 저장 완료 (VAN: $BUILD_PAYMENT_PROVIDER)", Toast.LENGTH_SHORT).show()
+
+        val userLabel = if (currentUser.isNotEmpty()) "사용자: '$currentUser'" else "기기 공통"
+        sendLogToWeb("CONFIG_SAVED", "$userLabel → 서버: $newUrl | VAN: $BUILD_PAYMENT_PROVIDER")
+        Log.d("CleanNoteLog", "[CONFIG_SAVED] $userLabel, URL: $newUrl (이전: $previousUrl)")
+
+        // 서버 주소가 실제로 변경된 경우에만 WebView 재접속
+        // (같은 주소를 저장할 때는 현재 페이지 유지 → 설정 화면이 닫히지 않음)
+        if (newUrl != previousUrl) {
+            runOnUiThread {
+                Toast.makeText(this, "[$userLabel] 서버 변경 → $newUrl", Toast.LENGTH_SHORT).show()
+                mainWebView?.loadUrl(newUrl)
+            }
+        } else {
+            Log.d("CleanNoteLog", "[CONFIG_SAVED] 서버 주소 동일 → WebView 유지")
+        }
     }
 }
 
@@ -866,6 +933,18 @@ class WebAppInterface(private val activity: MainActivity) {
     fun printReceipt(amount: String, cardName: String, cardNum: String, approvalNum: String, approvalDate: String) {
         activity.printReceipt(amount, cardName, cardNum, approvalNum, approvalDate)
     }
+
+    // 웹 로그인 완료 후 호출 → 사용자별 서버 설정으로 전환
+    // 사용 예: Android.setCurrentUser("1111");
+    @JavascriptInterface
+    fun setCurrentUser(username: String) {
+        activity.setCurrentUser(username)
+    }
+
+    // 현재 로그인된 사용자명 조회 (동기)
+    // 사용 예: const user = Android.getCurrentUser();
+    @JavascriptInterface
+    fun getCurrentUser(): String = activity.getCurrentUser()
 
     // 웹에서 빌드 고정값 조회 (동기 호출용)
     // 사용 예: const provider = Android.getPaymentProvider();
