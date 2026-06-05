@@ -50,8 +50,11 @@ private const val IS_DEBUG = true
 
 class MainActivity : ComponentActivity() {
     private lateinit var paymentLauncher: ActivityResultLauncher<Intent>
+    private lateinit var barcodeLauncher: ActivityResultLauncher<Intent>
     private var mainWebView: WebView? = null
     private var isDeviceInitialized = false
+    private var isWebViewLoaded = false       // WebView 최초 로드 완료 여부
+    private var isPendingBarcodeScan = false  // 바코드 스캔 진행 중 여부
 
     // 설정 관련 상수
     private val PREFS_NAME = "cleanpos_config"
@@ -105,7 +108,11 @@ class MainActivity : ComponentActivity() {
         Log.d("CleanNoteLog", fullLog)
         runOnUiThread {
             val escapedLog = fullLog.replace("'", "\\'").replace("\n", " ")
-            mainWebView?.evaluateJavascript("window.onPaymentLog('$escapedLog')", null)
+            // 웹에 함수가 없는 경우 JS 에러 방지
+            mainWebView?.evaluateJavascript(
+                "if(typeof window.onPaymentLog === 'function') window.onPaymentLog('$escapedLog')",
+                null
+            )
         }
     }
 
@@ -195,27 +202,65 @@ class MainActivity : ComponentActivity() {
             if (result.resultCode == RESULT_OK && data != null) {
                 // 응답 포맷으로 결제사 판별: NICE는 NVCATRETURNCODE extra를 포함
                 if (data.hasExtra("NVCATRETURNCODE") || data.hasExtra("NVCATRECVDATA")) {
-                    handleNiceResponse(data)
+                    // A002 바코드 응답 분기 (type1="A0", type2="02")
+                    val recvRaw = data.getStringExtra("NVCATRECVDATA") ?: ""
+                    val isBarcode = try {
+                        val j = org.json.JSONObject(recvRaw)
+                        j.optString("type1") == "A0" && j.optString("type2") == "02"
+                    } catch (e: Exception) { false }
+
+                    if (isBarcode) {
+                        handleBarcodeScanResult(data)
+                    } else {
+                        handleNiceResponse(data)
+                    }
                 } else {
                     handleKiccResponse(data)
                 }
             } else {
-                showPaymentResultDialog("작업 취소", "요청이 취소되었습니다.")
+                // 바코드 스캔 대기 중이었다면 취소 콜백 전달
+                if (isPendingBarcodeScan) {
+                    isPendingBarcodeScan = false
+                    Log.d("CleanNoteLog", "[BARCODE] 스캔 취소, resultCode=${result.resultCode}")
+                    runOnUiThread {
+                        mainWebView?.evaluateJavascript("window.onBarcodeResult(null)", null)
+                    }
+                } else {
+                    showPaymentResultDialog("작업 취소", "요청이 취소되었습니다.")
+                }
+            }
+        }
+
+        // barcodeLauncher는 paymentLauncher 백업용으로 유지
+        barcodeLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+            val data = result.data
+            isPendingBarcodeScan = false
+            if (result.resultCode == RESULT_OK && data != null) {
+                handleBarcodeScanResult(data)
+            } else {
+                Log.d("CleanNoteLog", "[BARCODE] 스캔 취소 또는 실패, resultCode=${result.resultCode}")
+                runOnUiThread {
+                    mainWebView?.evaluateJavascript("window.onBarcodeResult(null)", null)
+                }
             }
         }
 
         checkStoragePermission()
 
         enableEdgeToEdge()
+        // getServerUrl()을 setContent 바깥에서 1회만 평가 → Compose 재구성 시 반복 호출 방지
+        val initialUrl = getServerUrl()
+        Log.d("CleanNoteLog", "[SERVER_URL] 초기 접속: $initialUrl")
         setContent {
             CleanNoteTheme {
                 Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
                     WebViewScreen(
-                        url = getServerUrl(),
+                        url = initialUrl,
                         modifier = Modifier.padding(innerPadding),
                         onWebViewCreated = {
                             mainWebView = it
                             if (!isDeviceInitialized) initPaymentDevice()
+                            isWebViewLoaded = false
                         },
                         onPageReady = {
                             // 페이지 로드 완료 후 빌드 고정값을 웹으로 전달
@@ -865,7 +910,6 @@ class MainActivity : ComponentActivity() {
             ?: prefs.getString(KEY_PORT, DEFAULT_PORT)?.takeIf { it.isNotBlank() }
             ?: DEFAULT_PORT
         val url = "http://$host:$port/"
-        Log.d("CleanNoteLog", "[SERVER_URL] 사용자: '${getCurrentUser()}', URL: $url")
         return url
     }
 
@@ -932,6 +976,96 @@ class MainActivity : ComponentActivity() {
         runOnUiThread {
             Toast.makeText(this, "[$userLabel] 서버 변경 → $newUrl", Toast.LENGTH_SHORT).show()
             mainWebView?.loadUrl(newUrl)
+        }
+    }
+
+    // ===================================================================
+    // NICE VCAT 바코드 스캔 (세차권 바코드 읽기 — A002 전문)
+    // ===================================================================
+    fun requestNvcatBarcode() {
+        val json = buildNvcatJson("A0", "02", JSONObject())
+        val intent = Intent().apply {
+            action = "NICEVCAT"
+            putExtra("NEWNVCATSENDDATA", json)
+            type = "text/plain"
+        }
+        Log.d("CleanNoteLog", "[BARCODE] 바코드 스캔 요청: $json")
+        try {
+            isPendingBarcodeScan = true
+            barcodeLauncher.launch(intent)
+        } catch (e: ActivityNotFoundException) {
+            isPendingBarcodeScan = false
+            sendLogToWeb("ERROR", "NICE VCAT 앱을 찾을 수 없습니다.")
+            showPaymentResultDialog("바코드 스캔 오류", "NICE VCAT 앱을 찾을 수 없습니다.\n앱이 설치되어 있는지 확인해 주세요.")
+        } catch (e: Exception) {
+            isPendingBarcodeScan = false
+            sendLogToWeb("ERROR", "바코드 스캔 실행 오류: ${e.message}")
+            showPaymentResultDialog("바코드 스캔 오류", "앱 실행 중 오류가 발생했습니다.\n${e.message}")
+        }
+    }
+
+    private fun handleBarcodeScanResult(data: Intent) {
+        // NICE VCAT 응답 extra: NVCATRECVDATA (String JSON), NVCATRETURNCODE (int)
+        val recvData = (data.getStringExtra("NVCATRECVDATA")
+            ?: data.getStringExtra("nvcatRecvData") ?: "").trim()
+        val returnCode = data.extras?.getInt("NVCATRETURNCODE", -1)
+            ?: data.getStringExtra("nvcatReturnCode")?.toIntOrNull() ?: -1
+
+        Log.d("CleanNoteLog", "[BARCODE] returnCode=$returnCode recvData=$recvData")
+
+        if (recvData.isEmpty()) {
+            sendLogToWeb("BARCODE_ERROR", "바코드 응답 없음 (returnCode=$returnCode)")
+            runOnUiThread {
+                mainWebView?.evaluateJavascript("window.onBarcodeResult(null)", null)
+            }
+            return
+        }
+
+        try {
+            val recvJson = JSONObject(recvData)
+            val type1 = recvJson.optString("type1", "")
+            val type2 = recvJson.optString("type2", "")
+            val respData = recvJson.optJSONObject("data") ?: JSONObject()
+            val resultCode = respData.optString("RA63", "").trim()
+
+            Log.d("CleanNoteLog", "[BARCODE] type=$type1$type2 resultCode=$resultCode")
+
+            if (resultCode == "0000") {
+                // A002 응답의 고객정보 필드(RZ101): 바코드/휴대폰번호 등 스캔 데이터
+                val barcodeValue = respData.optString("RZ101", "").trim()
+                Log.d("CleanNoteLog", "[BARCODE] 스캔 성공: $barcodeValue")
+                if (barcodeValue.isEmpty()) {
+                    sendLogToWeb("BARCODE_ERROR", "RZ101 비어있음 | data: $respData")
+                    runOnUiThread {
+                        mainWebView?.evaluateJavascript("window.onBarcodeResult(null)", null)
+                    }
+                    return
+                }
+                sendLogToWeb("BARCODE_SUCCESS", "바코드: $barcodeValue")
+                val escapedValue = barcodeValue
+                    .replace("\\", "\\\\").replace("'", "\\'")
+                    .replace("\n", "\\n").replace("\r", "\\r")
+                runOnUiThread {
+                    mainWebView?.evaluateJavascript(
+                        "window.onBarcodeResult('$escapedValue')", null
+                    )
+                }
+            } else {
+                // PV01 = 취소, 그 외 = 실패
+                val resultMsg = respData.optString("RA71", "바코드 스캔 실패").trim()
+                val isCancelled = resultCode.startsWith("PV") || resultMsg.contains("취소")
+                Log.d("CleanNoteLog", "[BARCODE] ${if (isCancelled) "취소" else "실패"}: $resultMsg ($resultCode)")
+                sendLogToWeb("BARCODE_CANCEL", "${if (isCancelled) "취소" else "실패"}: $resultMsg ($resultCode)")
+                runOnUiThread {
+                    mainWebView?.evaluateJavascript("window.onBarcodeResult(null)", null)
+                }
+            }
+        } catch (e: Exception) {
+            sendLogToWeb("BARCODE_ERROR", "응답 파싱 오류: ${e.message}")
+            Log.d("CleanNoteLog", "[BARCODE] 파싱 오류: ${e.message}")
+            runOnUiThread {
+                mainWebView?.evaluateJavascript("window.onBarcodeResult(null)", null)
+            }
         }
     }
 }
@@ -1003,6 +1137,15 @@ class WebAppInterface(private val activity: MainActivity) {
     // 사용 예: const footer = Android.getReceiptFooter();
     @JavascriptInterface
     fun getReceiptFooter(): String = activity.getReceiptFooter()
+
+    // NICE VCAT 바코드 스캔 요청 (세차권 바코드 읽기 — A002 전문)
+    // 성공 시 window.onBarcodeResult(barcode) 로 바코드 문자열(RZ101)을 전달합니다.
+    // 스캔 실패/취소/빈값 시 window.onBarcodeResult(null) 호출됩니다.
+    // 사용 예: Android.startBarcodeScan();
+    @JavascriptInterface
+    fun startBarcodeScan() {
+        activity.runOnUiThread { activity.requestNvcatBarcode() }
+    }
 }
 
 @SuppressLint("SetJavaScriptEnabled")
