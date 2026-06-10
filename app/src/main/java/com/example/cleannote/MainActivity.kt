@@ -63,8 +63,9 @@ class MainActivity : ComponentActivity() {
     private val KEY_CURRENT_USER = "current_user"   // 현재 로그인 사용자명
     // KEY_PROVIDER / DEFAULT_PROVIDER 는 빌드 타임 상수(BUILD_PAYMENT_PROVIDER)로 대체됨
 
-    private val DEFAULT_HOST = "139.150.82.48"
-    private val DEFAULT_PORT = "8023"
+    private val DEFAULT_HOST = "cleannote.oilnote.co.kr"
+    private val DEFAULT_PORT = ""              // 도메인(https)은 기본 포트 사용 → 생략
+    private val OLD_DEFAULT_HOST = "139.150.82.48"  // 구 기본 IP (도메인으로 자동 전환용)
 
     // 가맹점 정보 상수
     private val KEY_MERCHANT_NAME = "merchant_name"
@@ -900,17 +901,33 @@ class MainActivity : ComponentActivity() {
             ?: prefs.getString(KEY_HOST, DEFAULT_HOST)?.takeIf { it.isNotBlank() }
             ?: DEFAULT_HOST
         // 이전에 http:// 가 포함된 채로 저장된 값을 방어 처리
-        val host = rawHost.trim()
+        var host = rawHost.trim()
             .removePrefix("https://")
             .removePrefix("http://")
             .trimEnd('/')
             .trim()
             .ifBlank { DEFAULT_HOST }
-        val port = prefs.getString(userKey(KEY_PORT), null)?.takeIf { it.isNotBlank() }
+        var port = prefs.getString(userKey(KEY_PORT), null)?.takeIf { it.isNotBlank() }
             ?: prefs.getString(KEY_PORT, DEFAULT_PORT)?.takeIf { it.isNotBlank() }
             ?: DEFAULT_PORT
-        val url = "http://$host:$port/"
-        return url
+
+        // 구 기본 IP(139.150.82.48)로 저장된 기기는 새 도메인으로 자동 전환
+        if (host == OLD_DEFAULT_HOST) {
+            host = DEFAULT_HOST
+            port = ""
+        }
+
+        // 프로토콜 자동 결정: 순수 IPv4는 http(하위호환), 도메인은 https
+        val isIp = host.matches(Regex("^\\d{1,3}(\\.\\d{1,3}){3}$"))
+        val scheme = if (isIp) "http" else "https"
+        // 기본 포트(https 443 / http 80)는 생략, 그 외만 ":port" 부착
+        val portPart = when {
+            port.isBlank() -> ""
+            scheme == "https" && port == "443" -> ""
+            scheme == "http" && port == "80" -> ""
+            else -> ":$port"
+        }
+        return "$scheme://$host$portPart/"
     }
 
     // 결제사는 AppConfig.kt 의 BUILD_PAYMENT_PROVIDER 값으로 빌드 시 고정됩니다.
@@ -956,7 +973,7 @@ class MainActivity : ComponentActivity() {
             apply()
         }
 
-        val newUrl = "http://$cleanHost:$finalPort/"
+        val newUrl = getServerUrl()   // 저장된 값 기준으로 실제 접속 URL(스킴/포트 반영) 구성
         val userLabel = if (currentUser.isNotEmpty()) "사용자: '$currentUser'" else "기기 공통"
         sendLogToWeb("CONFIG_SAVED", "$userLabel → 서버 저장: $newUrl")
         Log.d("CleanNoteLog", "[CONFIG_SAVED] $userLabel, URL: $newUrl")
