@@ -43,7 +43,7 @@ import java.util.Locale
 import kotlin.concurrent.thread
 
 // 디버그 모드 설정 (true: 파라미터 확인 팝업 표시, false: 즉시 실행)
-private const val IS_DEBUG = true
+private const val IS_DEBUG = false
 
 // 결제사 / 화면 크기는 AppConfig.kt 에서 빌드 전에 설정합니다.
 // → BUILD_PAYMENT_PROVIDER, BUILD_SCREEN_SIZE
