@@ -77,6 +77,10 @@ class MainActivity : ComponentActivity() {
     private val KEY_RECEIPT_FOOTER = "receipt_footer"
     private val DEFAULT_RECEIPT_FOOTER = "세차노트를 이용해 주셔서 감사합니다."
 
+    // 영수증 자동출력 (웹에서 setReceiptAutoPrint()로 설정, 기본 ON)
+    private val KEY_RECEIPT_AUTO_PRINT = "receipt_auto_print"
+    private val DEFAULT_RECEIPT_AUTO_PRINT = true
+
     // ── 사용자별 설정 키 생성 ──────────────────────────────────
     // 로그인한 사용자명을 prefix로 붙여 사용자마다 독립적인 설정을 저장합니다.
     // 예) 사용자 "1111" → "1111_server_host", "1111_server_port"
@@ -124,6 +128,12 @@ class MainActivity : ComponentActivity() {
         showPrintOption: Boolean = false,
         onPrintAction: (() -> Unit)? = null
     ) {
+        // 영수증 자동출력 ON + 인쇄 가능한 결과면 → 팝업 없이 즉시 인쇄
+        if (showPrintOption && onPrintAction != null && getReceiptAutoPrint()) {
+            Log.d("CleanNoteLog", "[RECEIPT_AUTO_PRINT] 자동출력 ON → 팝업 생략, 즉시 인쇄")
+            runOnUiThread { onPrintAction() }
+            return
+        }
         runOnUiThread {
             val builder = AlertDialog.Builder(this)
                 .setTitle(title)
@@ -907,6 +917,20 @@ class MainActivity : ComponentActivity() {
         Toast.makeText(this, "영수증 문구가 저장되었습니다.", Toast.LENGTH_SHORT).show()
     }
 
+    // 영수증 자동출력 설정 조회 (미설정 시 기본 ON)
+    fun getReceiptAutoPrint(): Boolean {
+        return getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .getBoolean(KEY_RECEIPT_AUTO_PRINT, DEFAULT_RECEIPT_AUTO_PRINT)
+    }
+
+    // 웹에서 Android.setReceiptAutoPrint(true/false) 로 자동출력 ON/OFF 저장 (토스트 없이 조용히 저장)
+    fun saveReceiptAutoPrint(enabled: Boolean) {
+        getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit()
+            .putBoolean(KEY_RECEIPT_AUTO_PRINT, enabled)
+            .apply()
+        Log.d("CleanNoteLog", "[RECEIPT_AUTO_PRINT] 저장: $enabled")
+    }
+
     private fun getServerUrl(): String {
         val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         // 1순위: 사용자별 설정 / 2순위: 기기 공통 설정 / 3순위: 하드코딩 기본값
@@ -1167,6 +1191,18 @@ class WebAppInterface(private val activity: MainActivity) {
     // 사용 예: const footer = Android.getReceiptFooter();
     @JavascriptInterface
     fun getReceiptFooter(): String = activity.getReceiptFooter()
+
+    // 영수증 자동출력 ON/OFF 저장 (웹 세팅 토글 / 페이지 로드 동기화)
+    // 사용 예: Android.setReceiptAutoPrint(true);
+    @JavascriptInterface
+    fun setReceiptAutoPrint(enabled: Boolean) {
+        activity.saveReceiptAutoPrint(enabled)
+    }
+
+    // 영수증 자동출력 현재값 조회 (동기)
+    // 사용 예: const auto = Android.getReceiptAutoPrint();
+    @JavascriptInterface
+    fun getReceiptAutoPrint(): Boolean = activity.getReceiptAutoPrint()
 
     // NICE VCAT 바코드 스캔 요청 (세차권 바코드 읽기 — A002 전문)
     // 성공 시 window.onBarcodeResult(barcode) 로 바코드 문자열(RZ101)을 전달합니다.
