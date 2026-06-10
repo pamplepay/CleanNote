@@ -931,6 +931,21 @@ class MainActivity : ComponentActivity() {
         Log.d("CleanNoteLog", "[RECEIPT_AUTO_PRINT] 저장: $enabled")
     }
 
+    // 설치된 앱 버전 조회 (versionName + versionCode) — 세팅 화면 표시용
+    fun getAppVersion(): String {
+        return try {
+            val pInfo = packageManager.getPackageInfo(packageName, 0)
+            val vName = pInfo.versionName ?: "?"
+            val vCode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P)
+                pInfo.longVersionCode
+            else
+                @Suppress("DEPRECATION") pInfo.versionCode.toLong()
+            "$vName ($vCode)"
+        } catch (e: Exception) {
+            "?"
+        }
+    }
+
     private fun getServerUrl(): String {
         val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         // 1순위: 사용자별 설정 / 2순위: 기기 공통 설정 / 3순위: 하드코딩 기본값
@@ -1203,6 +1218,11 @@ class WebAppInterface(private val activity: MainActivity) {
     // 사용 예: const auto = Android.getReceiptAutoPrint();
     @JavascriptInterface
     fun getReceiptAutoPrint(): Boolean = activity.getReceiptAutoPrint()
+
+    // 설치된 앱 버전 조회 (동기) — 세팅 화면 표시용
+    // 사용 예: const v = Android.getAppVersion();  // 예) "0.1 (18)"
+    @JavascriptInterface
+    fun getAppVersion(): String = activity.getAppVersion()
 
     // NICE VCAT 바코드 스캔 요청 (세차권 바코드 읽기 — A002 전문)
     // 성공 시 window.onBarcodeResult(barcode) 로 바코드 문자열(RZ101)을 전달합니다.
