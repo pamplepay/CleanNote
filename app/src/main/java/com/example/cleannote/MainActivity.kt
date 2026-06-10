@@ -869,7 +869,15 @@ class MainActivity : ComponentActivity() {
     }
 
     fun saveMerchantConfig(name: String, address: String) {
-        getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit().apply {
+        val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val oldName = prefs.getString(KEY_MERCHANT_NAME, DEFAULT_MERCHANT_NAME) ?: DEFAULT_MERCHANT_NAME
+        val oldAddress = prefs.getString(KEY_MERCHANT_ADDRESS, DEFAULT_MERCHANT_ADDRESS) ?: DEFAULT_MERCHANT_ADDRESS
+        // 값이 기존과 동일하면 재저장/토스트 생략 (웹이 화면 전환마다 호출해도 중복 토스트 방지)
+        if (oldName == name && oldAddress == address) {
+            Log.d("CleanNoteLog", "[MERCHANT] 변경 없음 → 저장/토스트 생략")
+            return
+        }
+        prefs.edit().apply {
             putString(KEY_MERCHANT_NAME, name)
             putString(KEY_MERCHANT_ADDRESS, address)
             apply()
@@ -887,9 +895,14 @@ class MainActivity : ComponentActivity() {
     // 웹에서 Android.setReceiptFooter("문구") 로 호출하여 영수증 하단 문구를 저장
     fun saveReceiptFooter(footer: String) {
         val text = footer.trim()
-        getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit()
-            .putString(KEY_RECEIPT_FOOTER, text)
-            .apply()
+        val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val oldRaw = prefs.getString(KEY_RECEIPT_FOOTER, null)
+        // 값이 기존과 동일하면 재저장/토스트 생략 (페이지 로드마다 호출돼도 중복 토스트 방지)
+        if (oldRaw == text) {
+            Log.d("CleanNoteLog", "[RECEIPT_FOOTER] 변경 없음 → 저장/토스트 생략")
+            return
+        }
+        prefs.edit().putString(KEY_RECEIPT_FOOTER, text).apply()
         Log.d("CleanNoteLog", "[RECEIPT_FOOTER] 저장: '$text'")
         Toast.makeText(this, "영수증 문구가 저장되었습니다.", Toast.LENGTH_SHORT).show()
     }
