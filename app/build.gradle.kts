@@ -11,7 +11,11 @@ android {
         applicationId = "com.example.cleannote"
         minSdk = 24
         targetSdk = 35
-        versionCode = 2
+        // versionCode: git 커밋 수 기반 자동 증가
+        // 코드를 커밋하고 빌드하면 자동으로 올라가 단말기가 항상 업데이트로 인식함
+        versionCode = providers.exec {
+            commandLine("git", "rev-list", "--count", "HEAD")
+        }.standardOutput.asText.get().trim().toIntOrNull() ?: 1
         versionName = "0.1"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
